@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Deno ASR · Ajustes</title>
+    <link rel="stylesheet" href="settings.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Ajustes</h1>
+        <p class="sub" id="config-path"></p>
+      </header>
+
+      <h2>General</h2>
+
+      <section class="field">
+        <label for="hotkey-btn">Atajo para grabar / parar</label>
+        <div class="row">
+          <button id="hotkey-btn" class="hotkey" type="button" aria-live="polite">…</button>
+          <button id="hotkey-reset" class="ghost" type="button" hidden>Cancelar</button>
+        </div>
+        <p class="hint" id="hotkey-hint">Pulsa el botón y después la combinación de teclas.</p>
+      </section>
+
+      <section class="field">
+        <label for="dir">Directorio del dataset</label>
+        <div class="row">
+          <input id="dir" type="text" spellcheck="false" autocomplete="off" />
+          <button id="pick" type="button">Elegir…</button>
+        </div>
+        <p class="hint">
+          Por cada grabación se guardan <code>id.wav</code> y <code>id.json</code>.
+        </p>
+      </section>
+
+      <h2>Transcripción</h2>
+
+      <section class="field">
+        <label for="backend">Motor</label>
+        <select id="backend"></select>
+        <p class="hint" id="backend-hint">Se aplica a la siguiente grabación.</p>
+      </section>
+
+      <div class="cols">
+        <section class="field">
+          <label for="language">Idioma</label>
+          <input id="language" type="text" list="languages" spellcheck="false" autocomplete="off" />
+          <datalist id="languages">
+            <option value="es">Español</option>
+            <option value="en">Inglés</option>
+            <option value="ca">Catalán</option>
+            <option value="gl">Gallego</option>
+            <option value="eu">Euskera</option>
+            <option value="pt">Portugués</option>
+            <option value="fr">Francés</option>
+            <option value="de">Alemán</option>
+            <option value="it">Italiano</option>
+          </datalist>
+          <p class="hint" id="language-hint">Código ISO: es, en, pt…</p>
+        </section>
+
+        <section class="field">
+          <label for="output">Qué hacer con el texto</label>
+          <select id="output"></select>
+          <p class="hint" id="output-hint"></p>
+        </section>
+      </div>
+
+      <div class="panel" data-backend="dashscope">
+        <section class="field">
+          <label for="dashscope-key">API key de DashScope</label>
+          <div class="row">
+            <input id="dashscope-key" type="password" spellcheck="false" autocomplete="off" />
+            <button id="dashscope-clear" class="ghost" type="button" hidden>Quitar</button>
+          </div>
+          <p class="hint" id="dashscope-hint">
+            Alibaba Cloud Model Studio → API keys. Región internacional por defecto.
+          </p>
+        </section>
+      </div>
+
+      <div class="panel" data-backend="elevenlabs">
+        <section class="field">
+          <label for="elevenlabs-key">API key de ElevenLabs</label>
+          <div class="row">
+            <input id="elevenlabs-key" type="password" spellcheck="false" autocomplete="off" />
+            <button id="elevenlabs-clear" class="ghost" type="button" hidden>Quitar</button>
+          </div>
+          <p class="hint" id="elevenlabs-hint">
+            elevenlabs.io → Developers → API keys (con permiso de Speech to Text).
+          </p>
+        </section>
+      </div>
+
+      <div class="panel" data-backend="vllm">
+        <section class="field">
+          <label for="vllm-url">URL del servidor vLLM</label>
+          <input id="vllm-url" type="text" spellcheck="false" autocomplete="off" />
+          <p class="hint" id="vllm-url-hint">p. ej. http://localhost:8000/v1</p>
+        </section>
+        <section class="field">
+          <label for="vllm-model">Modelo</label>
+          <input id="vllm-model" type="text" spellcheck="false" autocomplete="off" />
+          <p class="hint" id="vllm-model-hint">El nombre con el que lanzaste vllm serve.</p>
+        </section>
+        <section class="field">
+          <label for="vllm-key">API key (opcional)</label>
+          <div class="row">
+            <input id="vllm-key" type="password" spellcheck="false" autocomplete="off" />
+            <button id="vllm-clear" class="ghost" type="button" hidden>Quitar</button>
+          </div>
+          <p class="hint" id="vllm-hint">Solo si lanzaste vLLM con --api-key.</p>
+        </section>
+      </div>
+
+      <p id="status" role="status"></p>
+
+      <footer>
+        <button id="cancel" class="ghost" type="button">Cerrar</button>
+        <button id="save" class="primary" type="button">Guardar</button>
+      </footer>
+    </main>
+    <script src="settings.js"></script>
+  </body>
+</html>

@@ -1,0 +1,42 @@
+{
+  "name": "deno-asr",
+  "version": "0.1.0",
+  "exports": "./src/desktop.ts",
+  "tasks": {
+    "helper:build": "cargo build --release --manifest-path helper/Cargo.toml",
+    "helper:build:debug": "cargo build --manifest-path helper/Cargo.toml",
+    "dev": "deno task helper:build:debug && ASR_HELPER_PATH=helper/target/debug/asr-helper deno desktop --hmr -A --include ui/ src/desktop.ts",
+    "start": "deno task helper:build:debug && ASR_HELPER_PATH=helper/target/debug/asr-helper deno run -A src/headless.ts",
+    "toggle": "deno run -A src/cli.ts toggle",
+    "status": "deno run -A src/cli.ts status",
+    "cancel": "deno run -A src/cli.ts cancel",
+    "build:mac": "deno run -A scripts/build.ts mac",
+    "build:linux": "deno run -A scripts/build.ts linux",
+    "test": "deno test -A src/ && cargo test --manifest-path helper/Cargo.toml",
+    "check": "deno check src/ scripts/ && deno lint && deno fmt --check"
+  },
+  "imports": {
+    "@std/assert": "jsr:@std/assert@1",
+    "@std/encoding": "jsr:@std/encoding@1",
+    "@std/path": "jsr:@std/path@1",
+    "@std/streams": "jsr:@std/streams@1"
+  },
+  "fmt": {
+    "lineWidth": 100,
+    "exclude": ["helper/target/", "dist/"]
+  },
+  "lint": {
+    "exclude": ["helper/target/", "dist/"]
+  },
+  "desktop": {
+    "app": {
+      "name": "Deno ASR",
+      "identifier": "dev.damian.deno-asr"
+    },
+    "backend": "webview",
+    "output": {
+      "macos": "./dist/DenoASR.app",
+      "linux": "./dist/deno-asr"
+    }
+  }
+}
