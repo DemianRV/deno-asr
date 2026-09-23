@@ -14,6 +14,8 @@ pub enum Cmd {
     },
     Stop {
         path: String,
+        #[serde(default)]
+        normalize: bool,
     },
     Cancel,
     SetHotkey {
@@ -45,9 +47,13 @@ pub enum Event {
         sample_rate: u32,
         device: String,
     },
+    /// `peak` / `rms` are 0–1 of full scale, measured on the written WAV.
     Saved {
         path: String,
         duration_sec: f64,
+        peak: f64,
+        rms: f64,
+        gain: f64,
     },
     Cancelled,
     Devices {
@@ -117,7 +123,11 @@ mod tests {
         );
         assert_eq!(
             parse(r#"{"id":2,"cmd":"stop","path":"/tmp/a.wav"}"#).unwrap(),
-            Request { id: 2, cmd: Cmd::Stop { path: "/tmp/a.wav".into() } }
+            Request { id: 2, cmd: Cmd::Stop { path: "/tmp/a.wav".into(), normalize: false } }
+        );
+        assert_eq!(
+            parse(r#"{"id":5,"cmd":"stop","path":"/tmp/a.wav","normalize":true}"#).unwrap(),
+            Request { id: 5, cmd: Cmd::Stop { path: "/tmp/a.wav".into(), normalize: true } }
         );
         assert_eq!(
             parse(r#"{"id":3,"cmd":"set_hotkey","combo":"CmdOrCtrl+Shift+Space"}"#).unwrap(),
@@ -131,8 +141,17 @@ mod tests {
     fn encodes_events() {
         assert_eq!(encode(None, &Event::Hotkey), r#"{"event":"hotkey"}"#);
         assert_eq!(
-            encode(Some(2), &Event::Saved { path: "/tmp/a.wav".into(), duration_sec: 1.5 }),
-            r#"{"id":2,"event":"saved","path":"/tmp/a.wav","duration_sec":1.5}"#
+            encode(
+                Some(2),
+                &Event::Saved {
+                    path: "/tmp/a.wav".into(),
+                    duration_sec: 1.5,
+                    peak: 0.5,
+                    rms: 0.25,
+                    gain: 1.0,
+                }
+            ),
+            r#"{"id":2,"event":"saved","path":"/tmp/a.wav","duration_sec":1.5,"peak":0.5,"rms":0.25,"gain":1.0}"#
         );
         assert_eq!(
             encode(Some(3), &Event::Error { msg: "x".into() }),

@@ -75,9 +75,11 @@ y termina (nunca se queda con el micro abierto).
 
 1. Atajo / bandeja / socket → `Controller.toggle()`.
 2. `idle → starting`: se manda `start` al helper. Cuando responde `recording` (el stream ya está
-   sonando) → `recording` + sonido de inicio. Se programa auto-stop a `maxSeconds`.
-3. Segunda pulsación → `transcribing`: Deno genera id y ruta (`storage.newSample`) y manda
-   `stop {path}`. El helper escribe el WAV y responde `saved {duration_sec}`.
+   sonando) → `recording` + **dos pitidos ascendentes**: el micro ya está abierto, puedes hablar. Se
+   programa auto-stop a `maxSeconds`.
+3. Segunda pulsación → `transcribing` + **dos pitidos descendentes**: ya no escucha. Deno genera id
+   y ruta (`storage.newSample`) y manda `stop {path}`. El helper escribe el WAV y responde
+   `saved {duration_sec}`.
 4. Si dura menos de `minSeconds`, se borra y se descarta.
 5. Deno lee el WAV, lo manda al backend ASR, escribe el `.json` (atómico) y entrega el texto
    (pegar/escribir/portapapeles).
@@ -86,6 +88,20 @@ y termina (nunca se queda con el micro abierto).
 
 Pulsaciones durante `starting` o `transcribing` se ignoran.
 
+**Sonidos** (si `sounds` está activo):
+
+| Sonido                                  | Cuándo                                       |
+| --------------------------------------- | -------------------------------------------- |
+| Dos pitidos ascendentes (660 → 990 Hz)  | Empieza a escuchar: el micro ya está abierto |
+| Dos pitidos descendentes (990 → 660 Hz) | Deja de escuchar y se pone a transcribir     |
+| Tono grave (220 Hz, 0,3 s)              | Error (micro, transcripción, entrega)        |
+
+Se generan al arrancar ([src/core/sounds.ts](src/core/sounds.ts)) como WAV en
+`~/.cache/deno-asr/sounds/` (Linux) o `~/Library/Caches/deno-asr/sounds/` (macOS), así que no
+dependen del tema de sonido del sistema. Si no se pueden escribir, se usan los del sistema. Para
+oírlos: `pw-play ~/.cache/deno-asr/sounds/start.wav`. Con `ASR_DEBUG=exec` el log muestra
+`→ sound start` / `← sound start exit 0` en cada reproducción.
+
 ## Requisitos
 
 - [Deno](https://deno.com) ≥ 2.9 (necesario para `deno desktop`, que es experimental).
@@ -93,7 +109,8 @@ Pulsaciones durante `starting` o `transcribing` se ignoran.
 
 ### macOS
 
-Nada más. Usa `pbcopy`, `osascript` y `afplay`, que vienen con el sistema.
+Nada más. Usa `pbcopy`, `osascript` y `afplay` (para los sonidos generados), que vienen con el
+sistema.
 
 Permisos que pedirá macOS:
 
@@ -117,7 +134,7 @@ Qué se usa según sesión:
 | Atajo global     | atajo personalizado de GNOME + `nc` | `asr-helper` |
 | Portapapeles     | `wl-copy` / `wl-paste`              | `xclip`      |
 | Pegar / escribir | `ydotool`                           | `xdotool`    |
-| Sonidos          | `pw-play` o `paplay`                | ídem         |
+| Sonidos          | `pw-play`, `paplay` o `aplay`       | ídem         |
 | Selector carpeta | `zenity`                            | ídem         |
 | Notificaciones   | `notify-send`                       | ídem         |
 
@@ -165,18 +182,19 @@ deno task cancel   # descarta la grabación en curso
 
 ## Tareas
 
-| Tarea                    | Qué hace                                                       |
-| ------------------------ | -------------------------------------------------------------- |
-| `deno task dev`          | Compila el helper (debug) y lanza `deno desktop --hmr`         |
-| `deno task start`        | Compila el helper (debug) y lanza el modo headless             |
-| `deno task toggle`       | `toggle` por el socket de control                              |
-| `deno task status`       | Estado actual por el socket                                    |
-| `deno task cancel`       | Cancela la grabación en curso                                  |
-| `deno task helper:build` | `cargo build --release` del helper                             |
-| `deno task build:mac`    | Genera `dist/DenoASR.app` con el helper dentro, firmado ad-hoc |
-| `deno task build:linux`  | Genera `dist/deno-asr/` con el helper junto al binario         |
-| `deno task test`         | Tests de Deno + `cargo test`                                   |
-| `deno task check`        | `deno check` + `deno lint` + `deno fmt --check`                |
+| Tarea                    | Qué hace                                                        |
+| ------------------------ | --------------------------------------------------------------- |
+| `deno task dev`          | Compila el helper (debug) y lanza `deno desktop --hmr`          |
+| `deno task dev:debug`    | Igual, con todos los logs de debug en `/tmp/deno-asr-debug.log` |
+| `deno task start`        | Compila el helper (debug) y lanza el modo headless              |
+| `deno task toggle`       | `toggle` por el socket de control                               |
+| `deno task status`       | Estado actual por el socket                                     |
+| `deno task cancel`       | Cancela la grabación en curso                                   |
+| `deno task helper:build` | `cargo build --release` del helper                              |
+| `deno task build:mac`    | Genera `dist/DenoASR.app` con el helper dentro, firmado ad-hoc  |
+| `deno task build:linux`  | Genera `dist/deno-asr/` con el helper junto al binario          |
+| `deno task test`         | Tests de Deno + `cargo test`                                    |
+| `deno task check`        | `deno check` + `deno lint` + `deno fmt --check`                 |
 
 ## Configuración
 
@@ -229,12 +247,15 @@ se escriben a disco, así que puedes tener la API key solo en el entorno.
 | `notifications`             | `true`                                                   |                      | Avisos del sistema en errores y en modo `clipboard`                |
 | `maxSeconds`                | `300`                                                    |                      | Auto-stop. DashScope acepta hasta 10 MB (≈ 5 min a 16 kHz PCM16)   |
 | `minSeconds`                | `0.3`                                                    |                      | Grabaciones más cortas se descartan                                |
+| `normalize`                 | `true`                                                   |                      | Amplifica grabaciones flojas (pico < 50 %) hasta el 90 %, máx. 20x |
 
 Otras variables:
 
 | Variable          | Uso                                                                           |
 | ----------------- | ----------------------------------------------------------------------------- |
 | `ASR_HELPER_PATH` | Ruta al binario del helper. Si no está, `dirname(Deno.execPath())/asr-helper` |
+| `ASR_DEBUG`       | Logs de debug: `*` / `1` para todo, o lista de [namespaces](#logs-de-debug)   |
+| `ASR_DEBUG_FILE`  | Además de stderr, añade cada línea de debug a este fichero                    |
 
 ## Motores ASR
 
@@ -326,21 +347,26 @@ error.
   "model": "qwen3-asr-flash",
   "duration_sec": 4.21,
   "sample_rate": 16000,
+  "peak": 0.62,
+  "rms": 0.071,
+  "gain": 1,
   "created_at": "2026-09-23T01:36:00+02:00",
   "platform": "macos",
   "status": "ok"
 }
 ```
 
-| Campo            | Significado                                                               |
-| ---------------- | ------------------------------------------------------------------------- |
-| `audio`          | Nombre del WAV, relativo al propio `.json`                                |
-| `text`           | Salida literal del modelo (ITN desactivado en DashScope). `null` si falló |
-| `text_corrected` | Para tu corrección manual. `null` = sin corregir                          |
-| `reviewed`       | Márcalo a `true` cuando lo hayas revisado                                 |
-| `backend`        | `dashscope` \| `vllm` \| `elevenlabs`                                     |
-| `model`          | Modelo usado (`qwen3-asr-flash`, `Qwen/Qwen3-ASR-1.7B`, `scribe_v2`…)     |
-| `status`         | `ok` \| `error`. Con `error` hay además un campo `error` con el mensaje   |
+| Campo            | Significado                                                                      |
+| ---------------- | -------------------------------------------------------------------------------- |
+| `audio`          | Nombre del WAV, relativo al propio `.json`                                       |
+| `text`           | Salida literal del modelo (ITN desactivado en DashScope). `null` si falló        |
+| `text_corrected` | Para tu corrección manual. `null` = sin corregir                                 |
+| `reviewed`       | Márcalo a `true` cuando lo hayas revisado                                        |
+| `backend`        | `dashscope` \| `vllm` \| `elevenlabs`                                            |
+| `model`          | Modelo usado (`qwen3-asr-flash`, `Qwen/Qwen3-ASR-1.7B`, `scribe_v2`…)            |
+| `status`         | `ok` \| `error`. Con `error` hay además un campo `error` con el mensaje          |
+| `peak` / `rms`   | Nivel del WAV guardado (0–1 de fondo de escala), ya normalizado                  |
+| `gain`           | Ganancia de normalización aplicada (1 = sin tocar). Pico original: `peak / gain` |
 
 Para entrenar, el texto de referencia es `text_corrected ?? text`. Ejemplo de export a JSONL con
 `jq`:
@@ -351,6 +377,11 @@ find ~/deno-asr-dataset -name '*.json' -print0 \
 ```
 
 Si cambias `datasetDir`, las muestras nuevas van al directorio nuevo; las antiguas no se mueven.
+
+Con `normalize` (activo por defecto), el helper amplifica las grabaciones cuyo pico no llega al 50 %
+hasta dejarlo en el 90 %, con una ganancia máxima de 20x. Si aun así el modelo no devuelve texto y
+el pico original está por debajo del 3 %, verás el aviso _Audio casi en silencio_ en vez de _Sin
+texto_. Para filtrar muestras sospechosas del dataset: `jq 'select(.peak / .gain < 0.03)'`.
 
 ## Salida del texto
 
@@ -410,8 +441,11 @@ deno task test
   socket de control (comandos, instancia única) y cliente del helper contra un helper falso
   ([src/core/testdata/fake_helper.ts](src/core/testdata/fake_helper.ts)): request/response, eventos
   espontáneos, timeouts y reinicio tras crash.
+- Controller con helper y plataforma falsos: entrega, `copy` que agota el timeout (vuelve a `idle`),
+  aviso de silencio y pulsaciones ignoradas. `exec`: `detachOutput` con procesos que se quedan en
+  segundo plano (el caso de `xclip`), timeouts. Logger de debug.
 - **Rust** (`cargo test`): parseo/serialización del protocolo, remuestreo, clamping a i16, WAV
-  válido y parseo de atajos.
+  válido, nivel (peak/RMS), límites de la normalización y parseo de atajos.
 
 No hay test automático del micro real ni de la GUI.
 
@@ -425,6 +459,7 @@ helper/                   asr-helper (Rust), ver helper/README.md
   src/protocol.rs         tipos del protocolo JSON-lines
   src/recorder.rs         cpal → downmix → rubato 16 kHz → hound WAV
   src/hotkey.rs           global-hotkey (macOS / X11)
+  src/debug.rs            trazas por stderr con ASR_DEBUG
 src/
   desktop.ts              entrypoint deno desktop: bandeja, ventana de ajustes, bindings
   headless.ts             entrypoint sin GUI
@@ -437,6 +472,8 @@ src/
     control.ts            unix socket de control e instancia única
     settings.ts           validación de la ventana de ajustes y vista con keys enmascaradas
     storage.ts            ids, rutas y escritura atómica del .json
+    sounds.ts             tonos de inicio / fin / error generados como WAV
+    log.ts                logs de debug (ASR_DEBUG / ASR_DEBUG_FILE)
     asr/                  AsrBackend: dashscope.ts, vllm.ts, elevenlabs.ts
     platform/             portapapeles, pegado, sonidos, avisos, selector (darwin / linux)
   hotkey/
@@ -453,23 +490,53 @@ Protocolo: una línea (`toggle` | `status` | `cancel`) y una línea de respuesta
 
 ## Troubleshooting
 
-| Síntoma                                        | Causa / solución                                                                                                   |
-| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `asr-helper not found at …`                    | En dev usa `deno task dev` (define `ASR_HELPER_PATH`). En build, el helper debe estar junto al ejecutable          |
-| `another deno-asr instance is running`         | Ya hay una instancia respondiendo en el socket (`deno task status`). Un `.sock` huérfano se borra solo al arrancar |
-| Graba silencio en macOS                        | Permiso de micro denegado: _Ajustes → Privacidad y seguridad → Micrófono_. Revisa también `mic` en la config       |
-| No pega, pero el texto está en el portapapeles | macOS: falta Accesibilidad. Wayland: `ydotoold` no está corriendo o no tienes acceso a `/dev/uinput`               |
-| En terminales Linux no pega                    | Pon `"pasteKeys": "ctrl+shift+v"`                                                                                  |
-| `DashScope API key missing`                    | Define `DASHSCOPE_API_KEY` o `dashscope.apiKey`                                                                    |
-| `HTTP 401` de DashScope                        | Key de la región equivocada: la key internacional va con `dashscope-intl`, la de China con `dashscope`             |
-| `ElevenLabs API key missing` / `HTTP 401`      | Define `ELEVENLABS_API_KEY` o `elevenlabs.apiKey`, y comprueba que la key tiene permiso de Speech to Text          |
-| Cambio de motor en la bandeja sin efecto       | `ASR_BACKEND` está definida en el entorno y tiene prioridad sobre `config.json`                                    |
-| `audio is X MB; … up to 10 MB`                 | Grabación demasiado larga para DashScope. Baja `maxSeconds` o usa vLLM                                             |
-| El atajo no hace nada en Wayland               | Comprueba que `nc` es `netcat-openbsd` (`-U -N`) y que la entrada aparece en los atajos personalizados de GNOME    |
-| `hotkey … already registered`                  | Otra app tiene esa combinación. Elige otra                                                                         |
+| Síntoma                                                     | Causa / solución                                                                                                                                                                                                                                                         |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `asr-helper not found at …`                                 | En dev usa `deno task dev` (define `ASR_HELPER_PATH`). En build, el helper debe estar junto al ejecutable                                                                                                                                                                |
+| `another deno-asr instance is running`                      | Ya hay una instancia respondiendo en el socket (`deno task status`). Un `.sock` huérfano se borra solo al arrancar                                                                                                                                                       |
+| Graba silencio en macOS                                     | Permiso de micro denegado: _Ajustes → Privacidad y seguridad → Micrófono_. Revisa también `mic` en la config                                                                                                                                                             |
+| No pega, pero el texto está en el portapapeles              | macOS: falta Accesibilidad. Wayland: `ydotoold` no está corriendo o no tienes acceso a `/dev/uinput`                                                                                                                                                                     |
+| En terminales Linux no pega                                 | Pon `"pasteKeys": "ctrl+shift+v"`                                                                                                                                                                                                                                        |
+| `DashScope API key missing`                                 | Define `DASHSCOPE_API_KEY` o `dashscope.apiKey`                                                                                                                                                                                                                          |
+| `HTTP 401` de DashScope                                     | Key de la región equivocada: la key internacional va con `dashscope-intl`, la de China con `dashscope`                                                                                                                                                                   |
+| `ElevenLabs API key missing` / `HTTP 401`                   | Define `ELEVENLABS_API_KEY` o `elevenlabs.apiKey`, y comprueba que la key tiene permiso de Speech to Text                                                                                                                                                                |
+| Cambio de motor en la bandeja sin efecto                    | `ASR_BACKEND` está definida en el entorno y tiene prioridad sobre `config.json`                                                                                                                                                                                          |
+| `audio is X MB; … up to 10 MB`                              | Grabación demasiado larga para DashScope. Baja `maxSeconds` o usa vLLM                                                                                                                                                                                                   |
+| El atajo deja de responder tras una grabación               | El controller estaba atascado en `transcribing` (log: `pulsación ignorada (estado: transcribing)`). Causa típica: `xclip`/`wl-copy` bloqueando; ya se lanzan sin pipes y con timeout. Si vuelve a pasar, usa `deno task dev:debug` y mira la última línea `→` sin su `←` |
+| La app entera se congela (ni bandeja ni `deno task status`) | Deadlock dentro de `deno desktop`. En Linux ya no se usa la Web Notification (se usa `notify-send`). Con `ASR_DEBUG=desktop` salen `tick` cada 5 s: si paran, el último `→ tray.*`/`→ win.*` sin `←` es la llamada bloqueada. Compara con `deno task start` (headless)   |
+| Texto vacío / `Audio casi en silencio`                      | Ganancia de entrada baja o micro equivocado. Mira `grabando de "…"` en el log, `pactl list short sources`, sube la entrada en _Configuración → Sonido_ o fija `mic`. `ASR_DEBUG=rec` muestra dispositivo, formato y niveles                                              |
+| El atajo no hace nada en Wayland                            | Comprueba que `nc` es `netcat-openbsd` (`-U -N`) y que la entrada aparece en los atajos personalizados de GNOME                                                                                                                                                          |
+| `hotkey … already registered`                               | Otra app tiene esa combinación. Elige otra                                                                                                                                                                                                                               |
 
 Los logs salen por stderr: `[deno-asr]` para la app y `[asr-helper]` para el helper. En la app
 empaquetada de macOS: `/Applications/DenoASR.app/Contents/MacOS/laufey_webview` desde terminal.
+
+### Logs de debug
+
+Desactivados por defecto. Se activan con `ASR_DEBUG` (`*` / `1`, o una lista separada por comas):
+
+| Namespace    | Qué registra                                                                                                   |
+| ------------ | -------------------------------------------------------------------------------------------------------------- |
+| `exec`       | Cada comando externo (`→ xclip` / `← xclip exit 0 in 12ms`), timeouts y kills. Nunca el stdin                  |
+| `controller` | Transiciones de estado, pulsaciones ignoradas, tiempos de guardado / ASR / entrega, longitud del texto         |
+| `helper`     | Peticiones al helper (`→ #3 stop`) y respuestas con latencia, eventos espontáneos, reinicios                   |
+| `desktop`    | `→` / `←` alrededor de cada llamada nativa (bandeja, ventana, notificación), `menuclick` y un `tick` cada 5 s  |
+| `control`    | Conexiones al socket de control, comando y respuesta                                                           |
+| `rec`        | En el helper (Rust): dispositivo, formato nativo, entradas disponibles y niveles antes / después de normalizar |
+
+```bash
+ASR_DEBUG=exec,controller deno task dev
+ASR_DEBUG=* ASR_DEBUG_FILE=/tmp/deno-asr-debug.log deno task dev   # = deno task dev:debug
+tail -f /tmp/deno-asr-debug.log
+```
+
+`ASR_DEBUG_FILE` escribe de forma síncrona: si la app se congela, la última línea del fichero es lo
+último que llegó a ejecutarse. Las líneas de `rec` van solo a stderr.
+
+### `gsettings` y conda
+
+Si tienes un entorno de conda activo, su `gsettings` no ve los esquemas del escritorio. El modo
+`gnome` usa `/usr/bin/gsettings` cuando existe, así que no hace falta desactivar conda.
 
 ## Limitaciones conocidas
 

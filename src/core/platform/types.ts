@@ -6,6 +6,8 @@ export type SoundKind = "start" | "stop" | "error";
  */
 export interface Platform {
   readonly name: "macos" | "linux";
+  /** One-time setup before first use (e.g. writing the feedback tones). Never throws. */
+  init?(): Promise<void>;
   copy(text: string): Promise<void>;
   /** Current clipboard text; `null` if empty, non-text or unreadable. */
   readClipboard(): Promise<string | null>;

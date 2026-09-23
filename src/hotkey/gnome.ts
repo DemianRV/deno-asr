@@ -10,6 +10,19 @@ const LIST_KEY = "custom-keybindings";
 const ENTRY_PATH = "/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/deno-asr/";
 const ENTRY_SCHEMA = `${SCHEMA}.custom-keybinding:${ENTRY_PATH}`;
 
+/**
+ * Prefer the system binary: conda/brew ship their own `gsettings` that doesn't see the
+ * desktop's schemas or dconf database.
+ */
+function gsettingsBin(): string {
+  try {
+    Deno.statSync("/usr/bin/gsettings");
+    return "/usr/bin/gsettings";
+  } catch {
+    return "gsettings";
+  }
+}
+
 /** GVariant string literal. */
 export function gvString(s: string): string {
   return `'${s.replaceAll("\\", "\\\\").replaceAll("'", "\\'")}'`;
@@ -31,7 +44,7 @@ export function toggleCommand(socket: string): string {
 
 export async function gnomeAvailable(): Promise<boolean> {
   try {
-    const res = await run("gsettings", ["list-keys", SCHEMA]);
+    const res = await run(gsettingsBin(), ["list-keys", SCHEMA]);
     return res.code === 0 && res.stdout.includes(LIST_KEY);
   } catch {
     return false;
@@ -41,24 +54,29 @@ export async function gnomeAvailable(): Promise<boolean> {
 /** Adds (or updates) our custom keybinding without touching the user's others. */
 export async function registerGnomeShortcut(combo: string, socket: string): Promise<void> {
   const binding = toGnome(combo);
-  const list = parseStringArray(await runOk("gsettings", ["get", SCHEMA, LIST_KEY]));
+  const list = parseStringArray(await runOk(gsettingsBin(), ["get", SCHEMA, LIST_KEY]));
   if (!list.includes(ENTRY_PATH)) {
-    await runOk("gsettings", ["set", SCHEMA, LIST_KEY, formatStringArray([...list, ENTRY_PATH])]);
+    await runOk(gsettingsBin(), [
+      "set",
+      SCHEMA,
+      LIST_KEY,
+      formatStringArray([...list, ENTRY_PATH]),
+    ]);
   }
-  await runOk("gsettings", ["set", ENTRY_SCHEMA, "name", gvString("Deno ASR: grabar/parar")]);
-  await runOk("gsettings", ["set", ENTRY_SCHEMA, "command", gvString(toggleCommand(socket))]);
-  await runOk("gsettings", ["set", ENTRY_SCHEMA, "binding", gvString(binding)]);
+  await runOk(gsettingsBin(), ["set", ENTRY_SCHEMA, "name", gvString("Deno ASR: grabar/parar")]);
+  await runOk(gsettingsBin(), ["set", ENTRY_SCHEMA, "command", gvString(toggleCommand(socket))]);
+  await runOk(gsettingsBin(), ["set", ENTRY_SCHEMA, "binding", gvString(binding)]);
 }
 
 export async function unregisterGnomeShortcut(): Promise<void> {
-  const list = parseStringArray(await runOk("gsettings", ["get", SCHEMA, LIST_KEY]));
+  const list = parseStringArray(await runOk(gsettingsBin(), ["get", SCHEMA, LIST_KEY]));
   if (list.includes(ENTRY_PATH)) {
-    await runOk("gsettings", [
+    await runOk(gsettingsBin(), [
       "set",
       SCHEMA,
       LIST_KEY,
       formatStringArray(list.filter((p) => p !== ENTRY_PATH)),
     ]);
   }
-  await run("gsettings", ["reset-recursively", ENTRY_SCHEMA]);
+  await run(gsettingsBin(), ["reset-recursively", ENTRY_SCHEMA]);
 }

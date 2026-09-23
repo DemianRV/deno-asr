@@ -21,8 +21,15 @@ Deno.test("Helper request/response over JSON lines", async () => {
     const rec = await h.request<RecordingEvent>({ cmd: "start", device: "USB" });
     assertEquals(rec.device, "USB");
 
-    const saved = await h.request<SavedEvent>({ cmd: "stop", path: "/tmp/x.wav" });
-    assertEquals(saved, { event: "saved", path: "/tmp/x.wav", duration_sec: 1.25 });
+    const saved = await h.request<SavedEvent>({ cmd: "stop", path: "/tmp/x.wav", normalize: true });
+    assertEquals(saved, {
+      event: "saved",
+      path: "/tmp/x.wav",
+      duration_sec: 1.25,
+      peak: 0.9,
+      rms: 0.1,
+      gain: 2,
+    });
 
     await assertRejects(
       () => h.request({ cmd: "set_hotkey", combo: "bad" }),

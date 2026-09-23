@@ -1,8 +1,11 @@
 import { TextLineStream } from "@std/streams/text-line-stream";
+import { debug } from "./log.ts";
+
+const dbg = debug("helper");
 
 export type HelperCommand =
   | { cmd: "start"; device?: string }
-  | { cmd: "stop"; path: string }
+  | { cmd: "stop"; path: string; normalize?: boolean }
   | { cmd: "cancel" }
   | { cmd: "set_hotkey"; combo: string }
   | { cmd: "clear_hotkey" }
@@ -13,7 +16,16 @@ export type HelperCommand =
 
 export type ReadyEvent = { event: "ready"; version: string; hotkey_supported: boolean };
 export type RecordingEvent = { event: "recording"; sample_rate: number; device: string };
-export type SavedEvent = { event: "saved"; path: string; duration_sec: number };
+/** `peak`/`rms` are 0–1 of full scale, measured on the written WAV (after normalization). */
+export type SavedEvent = {
+  event: "saved";
+  path: string;
+  duration_sec: number;
+  peak?: number;
+  rms?: number;
+  /** Gain applied by normalization (1 = untouched). */
+  gain?: number;
+};
 export type DevicesEvent = { event: "devices"; devices: string[]; default: string | null };
 
 export type HelperEvent =
@@ -32,6 +44,8 @@ type Pending = {
   resolve: (e: HelperEvent) => void;
   reject: (e: Error) => void;
   timer: ReturnType<typeof setTimeout>;
+  cmd: string;
+  sentAt: number;
 };
 
 export class HelperError extends Error {
@@ -102,6 +116,7 @@ export class Helper extends EventTarget {
 
   #spawn() {
     this.#ready = undefined;
+    dbg(`spawn ${this.#opts.command}`, this.#opts.args);
     let child: Deno.ChildProcess;
     try {
       child = new Deno.Command(this.#opts.command, {
@@ -152,14 +167,19 @@ export class Helper extends EventTarget {
 
     if (id !== undefined) {
       const pending = this.#pending.get(id);
-      if (!pending) return;
+      if (!pending) {
+        dbg(`← #${id} ${ev.event} (late or unknown id)`);
+        return;
+      }
       this.#pending.delete(id);
       clearTimeout(pending.timer);
+      dbg(`← #${id} ${pending.cmd}: ${ev.event} in ${Date.now() - pending.sentAt}ms`, ev);
       if (ev.event === "error") pending.reject(new HelperError(ev.msg));
       else pending.resolve(ev);
       return;
     }
 
+    dbg(`event ${ev.event}`, ev);
     switch (ev.event) {
       case "ready":
         this.#ready = ev;
@@ -177,6 +197,7 @@ export class Helper extends EventTarget {
 
   #onExit(child: Deno.ChildProcess, code: number) {
     if (this.#child !== child) return;
+    dbg(`exit code ${code} (pending: ${this.#pending.size}, closing: ${this.#closing})`);
     this.#child = undefined;
     this.#writer = undefined;
     this.#ready = undefined;
@@ -194,6 +215,7 @@ export class Helper extends EventTarget {
   #scheduleRestart() {
     if (this.#closing || !this.#opts.restart) return;
     const delay = Math.min(30_000, 500 * 2 ** this.#restarts++);
+    dbg(`restart in ${delay}ms (attempt ${this.#restarts})`);
     setTimeout(() => {
       if (!this.#closing && !this.#child) this.#spawn();
     }, delay);
@@ -209,10 +231,12 @@ export class Helper extends EventTarget {
     const reply = new Promise<HelperEvent>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.#pending.delete(id);
+        dbg(`✗ #${id} ${command.cmd} timed out after ${timeoutMs}ms`);
         reject(new HelperError(`asr-helper timed out on '${command.cmd}'`));
       }, timeoutMs);
-      this.#pending.set(id, { resolve, reject, timer });
+      this.#pending.set(id, { resolve, reject, timer, cmd: command.cmd, sentAt: Date.now() });
     });
+    dbg(`→ #${id}`, command);
     await this.#writer.write(this.#encoder.encode(JSON.stringify({ id, ...command }) + "\n"));
     return (await reply) as E;
   }

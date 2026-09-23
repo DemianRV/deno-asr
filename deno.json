@@ -6,6 +6,7 @@
     "helper:build": "cargo build --release --manifest-path helper/Cargo.toml",
     "helper:build:debug": "cargo build --manifest-path helper/Cargo.toml",
     "dev": "deno task helper:build:debug && ASR_HELPER_PATH=helper/target/debug/asr-helper deno desktop --hmr -A --include ui/ src/desktop.ts",
+    "dev:debug": "ASR_DEBUG=* ASR_DEBUG_FILE=/tmp/deno-asr-debug.log deno task dev",
     "start": "deno task helper:build:debug && ASR_HELPER_PATH=helper/target/debug/asr-helper deno run -A src/headless.ts",
     "toggle": "deno run -A src/cli.ts toggle",
     "status": "deno run -A src/cli.ts status",

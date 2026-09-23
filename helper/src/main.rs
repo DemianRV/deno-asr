@@ -1,6 +1,7 @@
 //! asr-helper: microphone recording and global hotkey for deno-asr, driven over
 //! JSON lines on stdin/stdout (see README.md). Exits on stdin EOF.
 
+mod debug;
 mod hotkey;
 mod protocol;
 mod recorder;
@@ -17,7 +18,7 @@ fn dispatch(req: Request, hotkeys: &mut Hotkeys, recorder: &Recorder) -> bool {
     let Request { id, cmd } = req;
     match cmd {
         Cmd::Start { device } => recorder.start(id, device),
-        Cmd::Stop { path } => recorder.stop(id, path),
+        Cmd::Stop { path, normalize } => recorder.stop(id, path, normalize),
         Cmd::Cancel => recorder.cancel(id),
         Cmd::ListDevices => recorder.list_devices(id),
         Cmd::SetHotkey { combo } => reply(id, hotkeys.set(&combo)),

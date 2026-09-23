@@ -26,17 +26,17 @@ Los eventos sin `id` son espontáneos (`ready`, `hotkey`, errores del stream o l
 
 ### Comandos
 
-| Comando         | Campos                        | Respuesta OK                    | Errores típicos                                      |
-| --------------- | ----------------------------- | ------------------------------- | ---------------------------------------------------- |
-| `start`         | `device?: string`             | `recording`                     | `already recording`, `input device not found: …`     |
-| `stop`          | `path: string` (ruta del WAV) | `saved`                         | `not recording`, `empty recording`                   |
-| `cancel`        |                               | `cancelled` (aunque no grabase) |                                                      |
-| `list_devices`  |                               | `devices`                       |                                                      |
-| `set_hotkey`    | `combo: string`               | `ok`                            | `invalid hotkey …`, `cannot register …`, sin soporte |
-| `clear_hotkey`  |                               | `ok`                            |                                                      |
-| `pause_hotkey`  |                               | `ok`                            |                                                      |
-| `resume_hotkey` |                               | `ok`                            | `cannot re-register hotkey: …`                       |
-| `quit`          |                               | `ok` y sale                     |                                                      |
+| Comando         | Campos                                            | Respuesta OK                    | Errores típicos                                      |
+| --------------- | ------------------------------------------------- | ------------------------------- | ---------------------------------------------------- |
+| `start`         | `device?: string`                                 | `recording`                     | `already recording`, `input device not found: …`     |
+| `stop`          | `path: string` (ruta del WAV), `normalize?: bool` | `saved`                         | `not recording`, `empty recording`                   |
+| `cancel`        |                                                   | `cancelled` (aunque no grabase) |                                                      |
+| `list_devices`  |                                                   | `devices`                       |                                                      |
+| `set_hotkey`    | `combo: string`                                   | `ok`                            | `invalid hotkey …`, `cannot register …`, sin soporte |
+| `clear_hotkey`  |                                                   | `ok`                            |                                                      |
+| `pause_hotkey`  |                                                   | `ok`                            |                                                      |
+| `resume_hotkey` |                                                   | `ok`                            | `cannot re-register hotkey: …`                       |
+| `quit`          |                                                   | `ok` y sale                     |                                                      |
 
 Un comando desconocido o JSON inválido produce `{"event":"error","msg":"invalid request: …"}` sin
 `id`.
@@ -48,7 +48,7 @@ Un comando desconocido o JSON inválido produce `{"event":"error","msg":"invalid
 | `ready`     | `version`, `hotkey_supported: bool`            | Al arrancar, antes de leer stdin                            |
 | `hotkey`    |                                                | Se pulsó el atajo (solo `Pressed`, no `Released`)           |
 | `recording` | `sample_rate` (nativo del micro), `device`     | Respuesta a `start`, **después** de `stream.play()`         |
-| `saved`     | `path`, `duration_sec`                         | Respuesta a `stop`, con el WAV ya escrito                   |
+| `saved`     | `path`, `duration_sec`, `peak`, `rms`, `gain`  | Respuesta a `stop`, con el WAV ya escrito                   |
 | `cancelled` |                                                | Respuesta a `cancel`                                        |
 | `devices`   | `devices: string[]`, `default: string \| null` | Respuesta a `list_devices`                                  |
 | `ok`        |                                                | Respuesta genérica                                          |
@@ -65,7 +65,7 @@ Un comando desconocido o JSON inválido produce `{"event":"error","msg":"invalid
 ← {"id":2,"event":"recording","sample_rate":48000,"device":"Micrófono del MacBook Air"}
 ← {"event":"hotkey"}
 → {"id":3,"cmd":"stop","path":"/Users/damian/deno-asr-dataset/2026-09-23/20260923-013600-a1b2.wav"}
-← {"id":3,"event":"saved","path":"/Users/damian/deno-asr-dataset/2026-09-23/20260923-013600-a1b2.wav","duration_sec":4.21}
+← {"id":3,"event":"saved","path":"/Users/damian/deno-asr-dataset/2026-09-23/20260923-013600-a1b2.wav","duration_sec":4.21,"peak":0.62,"rms":0.071,"gain":1.0}
 ```
 
 Probarlo a mano:
@@ -84,6 +84,13 @@ printf '%s\n' '{"id":1,"cmd":"list_devices"}' | cargo run -q
 - En `stop`: se cierra el stream (libera el micro), se remuestrea a 16 kHz con `rubato::Fft`, se
   convierte a `i16` con clamping y se escribe el WAV con `hound`, creando los directorios padre.
 - `duration_sec` es la duración del WAV resultante.
+- Con `normalize: true`, si el pico está por debajo del 50 % se amplifica hasta el 90 %, con una
+  ganancia máxima de 20x (para no subir ruido puro a fondo de escala). `gain` es la ganancia
+  aplicada (1 = sin tocar).
+- `peak` y `rms` (0–1 de fondo de escala) se miden sobre el WAV escrito, o sea, después de
+  normalizar. El pico original es `peak / gain`.
+- Con `ASR_DEBUG=rec` (o `*`) el helper escribe por stderr el dispositivo, la config nativa (rate,
+  canales, formato), la lista de entradas y los niveles antes y después de normalizar.
 - `cpal::Stream` no es `Send` en macOS, así que vive en un hilo `audio` dedicado que recibe comandos
   por un `mpsc`.
 

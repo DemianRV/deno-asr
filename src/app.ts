@@ -41,6 +41,7 @@ export { AlreadyRunningError };
 
 export async function createApp(opts: AppOptions = {}): Promise<App> {
   const platform = currentPlatform();
+  await platform.init?.();
   const config = new ConfigStore();
   await config.load();
 
@@ -91,7 +92,9 @@ export async function createApp(opts: AppOptions = {}): Promise<App> {
     }
   }
 
-  helper.addEventListener("hotkey", () => controller.toggle());
+  helper.addEventListener("hotkey", () => {
+    controller.toggle().catch((err) => console.error(`[deno-asr] ${errMsg(err)}`));
+  });
   helper.addEventListener("message", (e) => {
     const detail = (e as CustomEvent).detail;
     if (detail?.event === "error") console.error(`[asr-helper] ${detail.msg}`);

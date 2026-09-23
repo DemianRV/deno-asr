@@ -3,6 +3,9 @@
  * replies with one line (`ok`, the state name, or `error …`) and closes.
  */
 import { join } from "@std/path";
+import { debug } from "./log.ts";
+
+const dbg = debug("control");
 
 export type ControlCommand = "toggle" | "status" | "cancel";
 
@@ -64,6 +67,7 @@ export async function startControlServer(
 
   const listener = Deno.listen({ transport: "unix", path });
   await Deno.chmod(path, 0o600);
+  dbg(`listening on ${path}`);
 
   (async () => {
     for await (const conn of listener) {
@@ -71,7 +75,11 @@ export async function startControlServer(
         try {
           const cmd = await readLine(conn) as ControlCommand;
           // Empty = liveness probe from another instance (connect + close).
-          if (!cmd) return;
+          if (!cmd) {
+            dbg("probe connection");
+            return;
+          }
+          dbg(`→ ${cmd}`);
           let reply: string;
           switch (cmd) {
             case "toggle":
@@ -88,6 +96,7 @@ export async function startControlServer(
             default:
               reply = `error unknown command '${cmd}'`;
           }
+          dbg(`← ${cmd}: ${reply}`);
           await conn.write(new TextEncoder().encode(reply + "\n"));
         } catch (err) {
           console.error(`[control] ${err}`);

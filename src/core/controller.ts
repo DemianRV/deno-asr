@@ -1,6 +1,7 @@
 import { type AsrBackend, createBackend } from "./asr/mod.ts";
 import type { Config, ConfigStore } from "./config.ts";
-import type { Helper, SavedEvent } from "./helper.ts";
+import type { Helper, RecordingEvent, SavedEvent } from "./helper.ts";
+import { debug } from "./log.ts";
 import type { Platform } from "./platform/mod.ts";
 import { isoLocal, newSample, type SampleMeta, type SamplePaths, writeMeta } from "./storage.ts";
 
@@ -22,7 +23,17 @@ export interface ControllerDeps {
   delay?: (ms: number) => Promise<void>;
 }
 
+const dbg = debug("controller");
+
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/** Below this peak (0–1, before normalization) the recording is treated as silence. */
+export const SILENCE_PEAK = 0.03;
+
+function round(n: number, digits: number): number {
+  const f = 10 ** digits;
+  return Math.round(n * f) / f;
+}
 
 function truncate(s: string, n = 120): string {
   return s.length > n ? `${s.slice(0, n - 1)}…` : s;
@@ -55,6 +66,7 @@ export class Controller extends EventTarget {
 
   #set(state: State) {
     if (this.#state === state) return;
+    dbg(`${this.#state} → ${state}`);
     this.#state = state;
     this.dispatchEvent(new CustomEvent<State>("state", { detail: state }));
   }
@@ -67,6 +79,7 @@ export class Controller extends EventTarget {
         return await this.stop();
       default:
         // starting / transcribing: ignore extra presses
+        console.error(`[deno-asr] pulsación ignorada (estado: ${this.#state})`);
         return;
     }
   }
@@ -76,7 +89,11 @@ export class Controller extends EventTarget {
     const cfg = this.#deps.config.get();
     this.#set("starting");
     try {
-      await this.#deps.helper.request({ cmd: "start", device: cfg.mic ?? undefined });
+      const rec = await this.#deps.helper.request<RecordingEvent>({
+        cmd: "start",
+        device: cfg.mic ?? undefined,
+      });
+      console.error(`[deno-asr] grabando de "${rec.device}" @ ${rec.sample_rate} Hz`);
     } catch (err) {
       this.#set("idle");
       await this.#fail(`No se pudo abrir el micrófono: ${errMsg(err)}`);
@@ -118,12 +135,14 @@ export class Controller extends EventTarget {
 
   async #process(cfg: Config, sample: SamplePaths) {
     let saved: SavedEvent;
+    let t = Date.now();
     try {
       // Resampling long recordings takes a moment; allow generous time.
       saved = await this.#deps.helper.request<SavedEvent>(
-        { cmd: "stop", path: sample.wavPath },
+        { cmd: "stop", path: sample.wavPath, normalize: cfg.normalize },
         120_000,
       );
+      dbg(`saved in ${Date.now() - t}ms`, saved);
     } catch (err) {
       await this.#fail(`No se pudo guardar el audio: ${errMsg(err)}`);
       return;
@@ -147,16 +166,22 @@ export class Controller extends EventTarget {
       model: backend.model,
       duration_sec: Math.round(saved.duration_sec * 100) / 100,
       sample_rate: 16000,
+      ...(saved.peak !== undefined && { peak: round(saved.peak, 4) }),
+      ...(saved.rms !== undefined && { rms: round(saved.rms, 4) }),
+      ...(saved.gain !== undefined && { gain: round(saved.gain, 2) }),
       created_at: isoLocal(sample.createdAt),
       platform: this.#deps.platform.name,
       status: "ok",
     };
 
     let text: string;
+    t = Date.now();
     try {
       const wav = await Deno.readFile(sample.wavPath);
       text = await backend.transcribe(wav, cfg.language, AbortSignal.timeout(120_000));
+      dbg(`${backend.name} answered in ${Date.now() - t}ms: ${text.length} chars`);
     } catch (err) {
+      dbg(`${backend.name} failed after ${Date.now() - t}ms: ${errMsg(err)}`);
       // Keep the audio so it can be re-transcribed later.
       meta.status = "error";
       meta.error = errMsg(err);
@@ -169,11 +194,31 @@ export class Controller extends EventTarget {
     await writeMeta(sample.jsonPath, meta);
 
     if (!text) {
-      await this.#notify("Sin texto", "El modelo no devolvió transcripción.");
+      const rawPeak = saved.peak !== undefined ? saved.peak / (saved.gain || 1) : undefined;
+      if (rawPeak !== undefined && rawPeak < SILENCE_PEAK) {
+        const pct = (rawPeak * 100).toFixed(1);
+        console.error(`[deno-asr] audio casi en silencio (peak ${pct} %)`);
+        await this.#notify(
+          "Audio casi en silencio",
+          `Peak ${pct} %. Revisa el micrófono o sube la ganancia de entrada.`,
+        );
+      } else {
+        await this.#notify("Sin texto", "El modelo no devolvió transcripción.");
+      }
       return;
     }
 
-    const delivered = await this.#deliver(cfg, text);
+    t = Date.now();
+    let delivered: ResultDetail["delivered"];
+    try {
+      delivered = await this.#deliver(cfg, text);
+    } catch (err) {
+      // The text is safe in the .json; this must not escape into a hotkey listener.
+      dbg(`delivery failed after ${Date.now() - t}ms: ${errMsg(err)}`);
+      await this.#fail(`No se pudo entregar el texto: ${errMsg(err)}`);
+      return;
+    }
+    dbg(`delivered (${delivered}) in ${Date.now() - t}ms`);
     this.dispatchEvent(
       new CustomEvent<ResultDetail>("result", { detail: { text, sample, delivered } }),
     );

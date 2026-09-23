@@ -12,13 +12,20 @@ use cpal::{SampleFormat, SizedSample, Stream, StreamConfig};
 use rubato::audioadapter_buffers::direct::InterleavedSlice;
 use rubato::{Fft, FixedSync, Resampler};
 
+use crate::debug::debug;
 use crate::protocol::{Event, emit, emit_error};
 
 pub const TARGET_RATE: u32 = 16_000;
 
+/// Normalization only kicks in below this peak, targets `NORMALIZE_TARGET`, and never
+/// amplifies more than `MAX_GAIN` (so pure noise isn't blown up to full scale).
+const NORMALIZE_BELOW: f32 = 0.5;
+const NORMALIZE_TARGET: f32 = 0.9;
+const MAX_GAIN: f32 = 20.0;
+
 enum AudioCmd {
     Start { id: u64, device: Option<String> },
-    Stop { id: u64, path: String },
+    Stop { id: u64, path: String, normalize: bool },
     Cancel { id: u64 },
     ListDevices { id: u64 },
 }
@@ -44,8 +51,8 @@ impl Recorder {
         self.send(AudioCmd::Start { id, device });
     }
 
-    pub fn stop(&self, id: u64, path: String) {
-        self.send(AudioCmd::Stop { id, path });
+    pub fn stop(&self, id: u64, path: String, normalize: bool) {
+        self.send(AudioCmd::Stop { id, path, normalize });
     }
 
     pub fn cancel(&self, id: u64) {
@@ -87,13 +94,22 @@ fn audio_thread(rx: Receiver<AudioCmd>) {
                     Err(e) => emit_error(Some(id), format!("{e:#}")),
                 }
             }
-            AudioCmd::Stop { id, path } => {
+            AudioCmd::Stop { id, path, normalize } => {
                 let Some(rec) = active.take() else {
                     emit_error(Some(id), "not recording");
                     continue;
                 };
-                match finish(rec, Path::new(&path)) {
-                    Ok(duration_sec) => emit(Some(id), Event::Saved { path, duration_sec }),
+                match finish(rec, Path::new(&path), normalize) {
+                    Ok(s) => emit(
+                        Some(id),
+                        Event::Saved {
+                            path,
+                            duration_sec: s.duration_sec,
+                            peak: s.peak as f64,
+                            rms: s.rms as f64,
+                            gain: s.gain as f64,
+                        },
+                    ),
                     Err(e) => emit_error(Some(id), format!("{e:#}")),
                 }
             }
@@ -144,6 +160,18 @@ fn open(device_name_hint: Option<&str>) -> Result<(Active, String)> {
         .default_input_config()
         .context("no default input config")?;
     let format = supported.sample_format();
+    debug!(
+        "rec",
+        "device {name:?} (requested {device_name_hint:?}): {} Hz, {} ch, {format}",
+        supported.sample_rate(),
+        supported.channels()
+    );
+    if crate::debug::enabled("rec") {
+        match list_devices() {
+            Ok((all, default)) => debug!("rec", "inputs {all:?}, default {default:?}"),
+            Err(e) => debug!("rec", "cannot list inputs: {e}"),
+        }
+    }
     let config: StreamConfig = supported.into();
     let source_rate = config.sample_rate;
     let buffer = Arc::new(Mutex::new(Vec::<f32>::with_capacity(source_rate as usize * 30)));
@@ -183,16 +211,55 @@ where
     Ok(stream)
 }
 
-fn finish(rec: Active, path: &Path) -> Result<f64> {
+pub struct Saved {
+    pub duration_sec: f64,
+    pub peak: f32,
+    pub rms: f32,
+    pub gain: f32,
+}
+
+fn finish(rec: Active, path: &Path, normalize: bool) -> Result<Saved> {
     drop(rec.stream);
     let mono = std::mem::take(&mut *rec.buffer.lock().map_err(|_| anyhow!("buffer poisoned"))?);
     if mono.is_empty() {
         return Err(anyhow!("empty recording"));
     }
-    let resampled = resample(&mono, rec.source_rate, TARGET_RATE)?;
+    let mut resampled = resample(&mono, rec.source_rate, TARGET_RATE)?;
+    let (peak_in, rms_in) = level(&resampled);
+    let gain = if normalize { normalize_gain(peak_in) } else { 1.0 };
+    if gain != 1.0 {
+        resampled.iter_mut().for_each(|s| *s *= gain);
+    }
+    let (peak, rms) = level(&resampled);
+    debug!(
+        "rec",
+        "captured {} samples @ {} Hz → {} @ {TARGET_RATE} Hz; peak {peak_in:.4} rms {rms_in:.4} → gain {gain:.2} → peak {peak:.4} rms {rms:.4}",
+        mono.len(),
+        rec.source_rate,
+        resampled.len()
+    );
     let samples = to_i16(&resampled);
     write_wav(path, &samples)?;
-    Ok(samples.len() as f64 / TARGET_RATE as f64)
+    Ok(Saved { duration_sec: samples.len() as f64 / TARGET_RATE as f64, peak, rms, gain })
+}
+
+/// `(peak, rms)` in 0–1 of full scale.
+pub fn level(samples: &[f32]) -> (f32, f32) {
+    if samples.is_empty() {
+        return (0.0, 0.0);
+    }
+    let peak = samples.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+    let sum_sq: f64 = samples.iter().map(|&s| (s as f64) * (s as f64)).sum();
+    let rms = (sum_sq / samples.len() as f64).sqrt() as f32;
+    (peak.min(1.0), rms.min(1.0))
+}
+
+/// Gain that lifts a quiet recording to `NORMALIZE_TARGET` peak, capped at `MAX_GAIN`.
+pub fn normalize_gain(peak: f32) -> f32 {
+    if peak <= 0.0 || peak >= NORMALIZE_BELOW {
+        return 1.0;
+    }
+    (NORMALIZE_TARGET / peak).min(MAX_GAIN)
 }
 
 pub fn resample(input: &[f32], from: u32, to: u32) -> Result<Vec<f32>> {
@@ -247,6 +314,25 @@ mod tests {
     #[test]
     fn clamps_to_i16() {
         assert_eq!(to_i16(&[0.0, 1.0, -1.0, 2.0, -2.0]), vec![0, 32767, -32767, 32767, -32767]);
+    }
+
+    #[test]
+    fn measures_level() {
+        assert_eq!(level(&[]), (0.0, 0.0));
+        let (peak, rms) = level(&[0.5, -0.5, 0.5, -0.5]);
+        assert!((peak - 0.5).abs() < 1e-6 && (rms - 0.5).abs() < 1e-6);
+        let (peak, _) = level(&[0.1, -0.8, 0.2]);
+        assert!((peak - 0.8).abs() < 1e-6);
+    }
+
+    #[test]
+    fn normalize_gain_bounds() {
+        assert_eq!(normalize_gain(0.0), 1.0);
+        assert_eq!(normalize_gain(0.5), 1.0);
+        assert_eq!(normalize_gain(0.8), 1.0);
+        assert!((normalize_gain(0.3) - 3.0).abs() < 1e-6);
+        // 450 / 32767 ≈ 1.4 % peak: capped at 20x instead of ~65x.
+        assert_eq!(normalize_gain(0.0137), MAX_GAIN);
     }
 
     #[test]

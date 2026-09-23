@@ -18,7 +18,15 @@ for await (const line of lines) {
       emit({ id, event: "recording", sample_rate: 48000, device: args.device ?? "Fake Mic" });
       break;
     case "stop":
-      emit({ id, event: "saved", path: args.path, duration_sec: 1.25 });
+      emit({
+        id,
+        event: "saved",
+        path: args.path,
+        duration_sec: 1.25,
+        peak: 0.9,
+        rms: 0.1,
+        gain: args.normalize ? 2 : 1,
+      });
       break;
     case "set_hotkey":
       if (args.combo === "bad") emit({ id, event: "error", msg: "invalid hotkey" });

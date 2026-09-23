@@ -26,6 +26,8 @@ export interface Config {
   maxSeconds: number;
   /** Recordings shorter than this are discarded. */
   minSeconds: number;
+  /** Boost quiet recordings (peak < 50 %) up to 90 % peak, max 20x gain. */
+  normalize: boolean;
 }
 
 type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K] };
@@ -66,6 +68,7 @@ export function defaults(): Config {
     notifications: true,
     maxSeconds: 300,
     minSeconds: 0.3,
+    normalize: true,
   };
 }
 

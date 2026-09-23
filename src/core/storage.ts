@@ -23,6 +23,11 @@ export interface SampleMeta {
   model: string;
   duration_sec: number;
   sample_rate: number;
+  /** Level of the WAV as written, 0–1 of full scale. */
+  peak?: number;
+  rms?: number;
+  /** Normalization gain applied by the helper (1 = untouched). */
+  gain?: number;
   created_at: string;
   platform: string;
   status: "ok" | "error";

@@ -10,6 +10,17 @@ import { BACKEND_LABEL, type SettingsInput, settingsView } from "./core/settings
 import { type BrowserWindow, desktopApi, type MenuItem, webNotify } from "./desktop/api.ts";
 import { trayIcons } from "./desktop/icons.ts";
 import { displayCombo, normalizeCombo } from "./hotkey/combo.ts";
+import { debug, debugEnabled } from "./core/log.ts";
+
+const dbg = debug("desktop");
+
+/** Wraps a native desktop call with enter/leave traces: a missing `←` marks a blocked call. */
+function traced<T>(name: string, fn: () => T): T {
+  dbg(`→ ${name}`);
+  const out = fn();
+  dbg(`← ${name}`);
+  return out;
+}
 
 const UI_DIR = new URL("../ui/", import.meta.url);
 const CONTENT_TYPES: Record<string, string> = {
@@ -146,7 +157,12 @@ async function main() {
   try {
     app = await createApp({
       notify: async (title, body) => {
-        if (!webNotify(title, body)) await platform.notify(title, body);
+        dbg(`notify "${title}"`);
+        // Web Notification in the Linux webview runtime is the prime suspect of a full
+        // UI/runtime deadlock; notify-send is out of process.
+        if (Deno.build.os === "linux" || !traced("Notification", () => webNotify(title, body))) {
+          await platform.notify(title, body);
+        }
       },
     });
   } catch (err) {
@@ -171,18 +187,19 @@ async function main() {
   if (Deno.build.os === "darwin") api.dock.setVisible(false);
 
   const hideSettings = () => {
-    win.hide();
+    traced("win.hide", () => win.hide());
     if (app.hotkeyMode() === "native") app.helper.request({ cmd: "resume_hotkey" }).catch(() => {});
   };
   const showSettings = () => {
-    win.reload();
-    win.show();
-    win.focus();
+    traced("win.reload", () => win.reload());
+    traced("win.show", () => win.show());
+    traced("win.focus", () => win.focus());
   };
 
   win.addEventListener("close", (e) => {
     e.preventDefault();
-    hideSettings();
+    dbg("window close");
+    setTimeout(hideSettings, 0);
   });
 
   const icons = await trayIcons();
@@ -193,21 +210,35 @@ async function main() {
     const idle = state === "idle";
     const onLinux = Deno.build.os === "linux";
     // Ubuntu's top bar is dark regardless of theme: use the light glyph there.
-    tray.setIcon(
-      idle
-        ? (onLinux ? icons.idleDark : icons.idle)
-        : state === "recording"
-        ? icons.recording
-        : icons.busy,
-    );
-    tray.setIconDark(idle ? icons.idleDark : null);
-    tray.setTooltip(`Deno ASR · ${STATE_LABEL[state]}`);
-    tray.setMenu(trayMenu(app, state));
+    const icon = idle
+      ? (onLinux ? icons.idleDark : icons.idle)
+      : state === "recording"
+      ? icons.recording
+      : icons.busy;
+    traced(`tray.setIcon (${state})`, () => tray.setIcon(icon));
+    traced("tray.setIconDark", () => tray.setIconDark(idle ? icons.idleDark : null));
+    traced("tray.setTooltip", () => tray.setTooltip(`Deno ASR · ${STATE_LABEL[state]}`));
+    traced("tray.setMenu", () => tray.setMenu(trayMenu(app, state)));
   };
   render(app.controller.state);
 
-  app.controller.addEventListener("state", (e) => render((e as CustomEvent<State>).detail));
-  app.config.addEventListener("change", () => render(app.controller.state));
+  // Native tray calls must not run inside a tray/helper callback: coalesce and defer them.
+  let renderPending = false;
+  const scheduleRender = () => {
+    if (renderPending) return;
+    renderPending = true;
+    setTimeout(() => {
+      renderPending = false;
+      render(app.controller.state);
+    }, 0);
+  };
+
+  app.controller.addEventListener("state", scheduleRender);
+  app.config.addEventListener("change", scheduleRender);
+
+  if (debugEnabled("desktop")) {
+    setInterval(() => dbg(`tick state=${app.controller.state}`), 5_000);
+  }
 
   const quit = async () => {
     await app.shutdown();
@@ -215,8 +246,14 @@ async function main() {
     Deno.exit(0);
   };
 
-  tray.addEventListener("menuclick", async (e) => {
+  tray.addEventListener("menuclick", (e) => {
     const id = (e as CustomEvent<{ id: string }>).detail.id;
+    dbg(`menuclick ${id}`);
+    // Return to the native event loop right away; do the work on a later tick.
+    setTimeout(() => onMenu(id).catch((err) => console.error(`[deno-asr] ${errMsg(err)}`)), 0);
+  });
+
+  async function onMenu(id: string) {
     if (id.startsWith(BACKEND_ID_PREFIX)) {
       const backend = id.slice(BACKEND_ID_PREFIX.length) as AsrBackendName;
       if (ASR_BACKENDS.includes(backend)) {
@@ -246,7 +283,7 @@ async function main() {
         await quit();
         break;
     }
-  });
+  }
 
   bindSettings(win, app, () => render(app.controller.state), hideSettings);
 
