@@ -5,7 +5,8 @@
  * 2. deno desktop
  * 3. place asr-helper next to the app executable (the app looks for it in
  *    dirname(Deno.execPath()))
- * 4. macOS: localize the mic usage string and re-sign the bundle
+ * 4. macOS: localize the mic usage string and re-sign the bundle with
+ *    $DENO_ASR_SIGN_IDENTITY, the "Deno ASR Dev" certificate if present, or ad-hoc
  */
 import { dirname, join } from "@std/path";
 
@@ -39,6 +40,25 @@ function desktopArgs(output: string): string[] {
   return ["desktop", "-A", "--include", "ui/", "-o", output, "src/desktop.ts"];
 }
 
+const DEFAULT_IDENTITY = "Deno ASR Dev";
+
+/**
+ * Ad-hoc signatures pin TCC grants (Accessibility, Input Monitoring) to the cdhash, which
+ * changes every build; a stable certificate keeps them across rebuilds.
+ */
+async function signIdentity(): Promise<string> {
+  const fromEnv = Deno.env.get("DENO_ASR_SIGN_IDENTITY");
+  if (fromEnv) return fromEnv;
+  // No `-v`: an untrusted self-signed cert is not "valid" but codesign accepts it.
+  const { code, stdout } = await new Deno.Command("security", {
+    args: ["find-identity", "-p", "codesigning"],
+    stdout: "piped",
+    stderr: "null",
+  }).output();
+  const found = code === 0 && new TextDecoder().decode(stdout).includes(`"${DEFAULT_IDENTITY}"`);
+  return found ? DEFAULT_IDENTITY : "-";
+}
+
 async function buildMac() {
   const app = join(ROOT, "dist/DenoASR.app");
   await Deno.remove(app, { recursive: true }).catch(() => {});
@@ -59,7 +79,14 @@ async function buildMac() {
     sh(buddy, ["-c", "Set :LSUIElement true", plist])
   );
 
-  await sh("codesign", ["--force", "--deep", "--sign", "-", app]);
+  const identity = await signIdentity();
+  if (identity === "-") {
+    console.warn(
+      `⚠ firma ad-hoc: macOS pedirá de nuevo Accesibilidad tras cada build ` +
+        `(crea el certificado "${DEFAULT_IDENTITY}", ver README)`,
+    );
+  }
+  await sh("codesign", ["--force", "--deep", "--sign", identity, app]);
   await sh("codesign", ["--verify", "--deep", "--strict", app]);
   console.log(`\n✓ ${app}`);
 }

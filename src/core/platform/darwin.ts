@@ -13,6 +13,30 @@ const SYSTEM_SOUNDS: Record<SoundKind, string> = {
 };
 let sounds: Record<SoundKind, string> = SYSTEM_SOUNDS;
 
+// TCC attributes the check to the responsible app (DenoASR.app, or the terminal in dev).
+const AX_CHECK = 'ObjC.import("ApplicationServices"); $.AXIsProcessTrusted()';
+// osascript is a platform binary, so TCC never shows the Accessibility prompt for it.
+const AX_SETTINGS = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
+let axTrusted = false;
+let axSettingsOpened = false;
+
+/**
+ * Without Accessibility, System Events drops the keystrokes and osascript still exits 0,
+ * so check up front. A stale grant (re-signed build) also reads as untrusted.
+ */
+async function assertAccessibility(): Promise<void> {
+  if (axTrusted) return;
+  const res = await run("osascript", ["-l", "JavaScript", "-e", AX_CHECK]);
+  if (res.code !== 0) return; // can't tell: try anyway
+  axTrusted = res.stdout.trim() === "true";
+  if (axTrusted) return;
+  if (!axSettingsOpened) {
+    axSettingsOpened = true;
+    spawnDetached("open", [AX_SETTINGS], "accessibility settings");
+  }
+  throw new Error("activa Deno ASR en Ajustes → Privacidad y seguridad → Accesibilidad");
+}
+
 /** AppleScript string literal. */
 export function asString(s: string): string {
   return `"${s.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
@@ -39,7 +63,7 @@ export const darwin: Platform = {
   },
 
   async paste() {
-    // Requires Accessibility permission for the app.
+    await assertAccessibility();
     await runOk("osascript", [
       "-e",
       'tell application "System Events" to keystroke "v" using command down',
@@ -47,6 +71,7 @@ export const darwin: Platform = {
   },
 
   async typeText(text) {
+    await assertAccessibility();
     await runOk("osascript", [
       "-e",
       `tell application "System Events" to keystroke ${asString(text)}`,

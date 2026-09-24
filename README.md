@@ -412,11 +412,61 @@ open dist/DenoASR.app
 3. Copia `asr-helper` a `Contents/MacOS/` (la app lo busca en `dirname(Deno.execPath())`).
 4. `PlistBuddy`: `NSMicrophoneUsageDescription` en español, `CFBundleName = "Deno ASR"` y
    `LSUIElement = true` (sin icono en el Dock).
-5. `codesign --force --deep --sign -` y `codesign --verify --deep --strict`.
+5. `codesign --force --deep --sign <identidad>` y `codesign --verify --deep --strict`. La identidad
+   es `$DENO_ASR_SIGN_IDENTITY`, si no el certificado `Deno ASR Dev` si está en el llavero, y si no
+   ad-hoc (`-`).
 
-La firma es ad-hoc: sirve en tu máquina. Para distribuirla hace falta un Developer ID y
-notarización. Si re-firmas o recompilas, macOS puede volver a pedir los permisos de micro y
-Accesibilidad.
+#### Firma estable (recomendado)
+
+Con firma ad-hoc, macOS ata los permisos (Accesibilidad, Monitorización de entrada) al hash del
+binario, que cambia en cada build. Después de recompilar, la app sigue marcada en _Ajustes →
+Accesibilidad_ pero el permiso ya no vale: `osascript` sale con 0 y el Cmd+V se descarta en
+silencio. En los logs de `tccd` aparece
+`Failed to match existing code requirement for subject dev.damian.deno-asr`.
+
+Con un certificado autofirmado, el permiso va ligado al certificado y aguanta los rebuilds. Se crea
+una sola vez:
+
+```bash
+cat > /tmp/deno-asr-cs.cnf <<'EOF'
+[req]
+distinguished_name = dn
+x509_extensions = ext
+prompt = no
+[dn]
+CN = Deno ASR Dev
+[ext]
+basicConstraints = critical,CA:false
+keyUsage = critical,digitalSignature
+extendedKeyUsage = critical,codeSigning
+EOF
+# /usr/bin/openssl (LibreSSL) genera un .p12 que `security` sabe importar; con OpenSSL 3
+# añade `-legacy` al pkcs12.
+/usr/bin/openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -config /tmp/deno-asr-cs.cnf \
+  -keyout /tmp/deno-asr-cs.key -out /tmp/deno-asr-cs.crt
+/usr/bin/openssl pkcs12 -export -inkey /tmp/deno-asr-cs.key -in /tmp/deno-asr-cs.crt \
+  -out /tmp/deno-asr-cs.p12 -passout pass:deno-asr
+security import /tmp/deno-asr-cs.p12 -k ~/Library/Keychains/login.keychain-db \
+  -P deno-asr -T /usr/bin/codesign
+rm /tmp/deno-asr-cs.*
+security find-identity -p codesigning | grep "Deno ASR Dev"
+```
+
+También se puede crear desde _Acceso a Llaveros → Asistente de certificados → Crear un certificado_:
+nombre `Deno ASR Dev`, tipo de identidad "Raíz autofirmada", tipo de certificado "Firma de código".
+
+La primera vez que firmes con el certificado nuevo, resetea los permisos antiguos y concédelos otra
+vez:
+
+```bash
+deno task build:mac
+tccutil reset Accessibility dev.damian.deno-asr
+tccutil reset PostEvent dev.damian.deno-asr
+open dist/DenoASR.app
+```
+
+Es posible que `codesign` pida acceso al llavero en el primer build: pulsa _Permitir siempre_. Para
+distribuir la app sigue haciendo falta un Developer ID y notarización.
 
 ### Linux
 
@@ -544,6 +594,7 @@ Protocolo: una línea (`toggle` | `status` | `cancel`) y una línea de respuesta
 | `another deno-asr instance is running`                      | Ya hay una instancia respondiendo en el socket (`deno task status`). Un `.sock` huérfano se borra solo al arrancar                                                                                                                                                       |
 | Graba silencio en macOS                                     | Permiso de micro denegado: _Ajustes → Privacidad y seguridad → Micrófono_. Revisa también `mic` en la config                                                                                                                                                             |
 | No pega, pero el texto está en el portapapeles              | macOS: falta Accesibilidad. Wayland: `ydotoold` no está corriendo o no tienes acceso a `/dev/uinput`                                                                                                                                                                     |
+| macOS: dejó de pegar tras recompilar, sin aviso             | Firma ad-hoc: el permiso de Accesibilidad era del build anterior. `tccutil reset Accessibility dev.damian.deno-asr` y concédelo de nuevo; para que no vuelva a pasar, ver [Firma estable](#firma-estable-recomendado)                                                    |
 | En terminales Linux no pega                                 | Pon `"pasteKeys": "ctrl+shift+v"`                                                                                                                                                                                                                                        |
 | `DashScope API key missing`                                 | Define `DASHSCOPE_API_KEY` o `dashscope.apiKey`                                                                                                                                                                                                                          |
 | `HTTP 401` de DashScope                                     | Key de la región equivocada: la key internacional va con `dashscope-intl`, la de China con `dashscope`                                                                                                                                                                   |
