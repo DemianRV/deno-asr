@@ -13,7 +13,9 @@
     "cancel": "deno run -A src/cli.ts cancel",
     "build:mac": "deno run -A scripts/build.ts mac",
     "build:linux": "deno run -A scripts/build.ts linux",
-    "test": "deno test -A src/ && cargo test --manifest-path helper/Cargo.toml",
+    "install:linux": "deno run -A scripts/install_linux.ts install",
+    "uninstall:linux": "deno run -A scripts/install_linux.ts uninstall",
+    "test": "deno test -A src/ scripts/ && cargo test --manifest-path helper/Cargo.toml",
     "check": "deno check src/ scripts/ && deno lint && deno fmt --check"
   },
   "imports": {

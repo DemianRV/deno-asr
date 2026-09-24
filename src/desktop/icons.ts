@@ -81,24 +81,62 @@ function inMic(x: number, y: number, dot: boolean): boolean {
   return false;
 }
 
-async function render(color: RGB, dot: boolean, size = 22): Promise<Uint8Array> {
+/** Optional filled circle behind the glyph; the mic is shrunk by `micScale` to fit inside. */
+interface Background {
+  color: RGB;
+  micScale: number;
+}
+
+async function render(
+  color: RGB,
+  dot: boolean,
+  size = 22,
+  bg?: Background,
+): Promise<Uint8Array> {
   const ss = 4; // supersampling for anti-aliasing
   const rgba = new Uint8Array(size * size * 4);
   const scale = 22 / size;
+  const samples = ss * ss;
   for (let py = 0; py < size; py++) {
     for (let px = 0; px < size; px++) {
-      let hits = 0;
+      let micHits = 0;
+      let bgHits = 0;
       for (let sy = 0; sy < ss; sy++) {
         for (let sx = 0; sx < ss; sx++) {
-          if (inMic((px + (sx + 0.5) / ss) * scale, (py + (sy + 0.5) / ss) * scale, dot)) hits++;
+          const x = (px + (sx + 0.5) / ss) * scale;
+          const y = (py + (sy + 0.5) / ss) * scale;
+          if (!bg) {
+            if (inMic(x, y, dot)) micHits++;
+            continue;
+          }
+          const mx = 11 + (x - 11) / bg.micScale;
+          const my = 11 + (y - 11) / bg.micScale;
+          if (inMic(mx, my, dot)) micHits++;
+          else if ((x - 11) ** 2 + (y - 11) ** 2 <= 11 * 11) bgHits++;
         }
       }
       const i = (py * size + px) * 4;
-      rgba.set(color, i);
-      rgba[i + 3] = Math.round((hits / (ss * ss)) * 255);
+      const covered = micHits + bgHits;
+      if (!bg || covered === 0) {
+        rgba.set(color, i);
+        rgba[i + 3] = Math.round((micHits / samples) * 255);
+        continue;
+      }
+      // Blend glyph and background by coverage (non-premultiplied output).
+      for (let c = 0; c < 3; c++) {
+        rgba[i + c] = Math.round((color[c] * micHits + bg.color[c] * bgHits) / covered);
+      }
+      rgba[i + 3] = Math.round((covered / samples) * 255);
     }
   }
   return await encodePng(size, size, rgba);
+}
+
+const APP_BLUE: RGB = [10, 132, 255];
+
+/** App/menu icon: white microphone on a blue disc. */
+export function appIcon(size = 256): Promise<Uint8Array> {
+  return render([255, 255, 255], false, size, { color: APP_BLUE, micScale: 0.62 });
 }
 
 export interface TrayIcons {

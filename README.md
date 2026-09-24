@@ -182,19 +182,21 @@ deno task cancel   # descarta la grabación en curso
 
 ## Tareas
 
-| Tarea                    | Qué hace                                                        |
-| ------------------------ | --------------------------------------------------------------- |
-| `deno task dev`          | Compila el helper (debug) y lanza `deno desktop --hmr`          |
-| `deno task dev:debug`    | Igual, con todos los logs de debug en `/tmp/deno-asr-debug.log` |
-| `deno task start`        | Compila el helper (debug) y lanza el modo headless              |
-| `deno task toggle`       | `toggle` por el socket de control                               |
-| `deno task status`       | Estado actual por el socket                                     |
-| `deno task cancel`       | Cancela la grabación en curso                                   |
-| `deno task helper:build` | `cargo build --release` del helper                              |
-| `deno task build:mac`    | Genera `dist/DenoASR.app` con el helper dentro, firmado ad-hoc  |
-| `deno task build:linux`  | Genera `dist/deno-asr/` con el helper junto al binario          |
-| `deno task test`         | Tests de Deno + `cargo test`                                    |
-| `deno task check`        | `deno check` + `deno lint` + `deno fmt --check`                 |
+| Tarea                       | Qué hace                                                        |
+| --------------------------- | --------------------------------------------------------------- |
+| `deno task dev`             | Compila el helper (debug) y lanza `deno desktop --hmr`          |
+| `deno task dev:debug`       | Igual, con todos los logs de debug en `/tmp/deno-asr-debug.log` |
+| `deno task start`           | Compila el helper (debug) y lanza el modo headless              |
+| `deno task toggle`          | `toggle` por el socket de control                               |
+| `deno task status`          | Estado actual por el socket                                     |
+| `deno task cancel`          | Cancela la grabación en curso                                   |
+| `deno task helper:build`    | `cargo build --release` del helper                              |
+| `deno task build:mac`       | Genera `dist/DenoASR.app` con el helper dentro, firmado ad-hoc  |
+| `deno task build:linux`     | Genera `dist/deno-asr/` con el helper junto al binario          |
+| `deno task install:linux`   | Build + instala en `~/.local` (menú, autostart, `deno-asr`)     |
+| `deno task uninstall:linux` | Quita lo instalado (conserva config, dataset y log)             |
+| `deno task test`            | Tests de Deno + `cargo test`                                    |
+| `deno task check`           | `deno check` + `deno lint` + `deno fmt --check`                 |
 
 ## Configuración
 
@@ -422,13 +424,58 @@ Accesibilidad.
 deno task build:linux
 ```
 
-Genera la salida de `deno desktop` en `dist/deno-asr/` y copia `asr-helper` junto al runtime
-(`libruntime.so` / `laufey_webview`) y en la raíz de `dist/deno-asr/`.
+Genera la salida de `deno desktop` en `dist/deno-asr/` (`deno-asr`, `deno-asr.so`) y copia
+`asr-helper` al lado.
 
-### Autostart (manual)
+### Instalar en Ubuntu
 
+Instalación por usuario, sin `sudo`:
+
+```bash
+deno task install:linux                 # build + instala + autostart + arranca
+deno task install:linux --no-build      # reutiliza dist/deno-asr
+deno task install:linux --no-autostart  # sin arranque al iniciar sesión
+deno task install:linux --debug         # la app instalada arranca con ASR_DEBUG=*
+deno task install:linux --no-launch     # no la arranca al terminar
+deno task uninstall:linux
+```
+
+Qué hace:
+
+1. Comprueba paquetes (`xclip`, `xdotool`, `wl-clipboard`, `zenity`, `libnotify-bin`,
+   `netcat-openbsd`, WebKitGTK, AppIndicator y `ydotool` solo en Wayland) y la extensión de la
+   bandeja. Si falta algo imprime el `sudo apt
+   install …`, pero no lo ejecuta.
+2. `build:linux` (salvo `--no-build`).
+3. Para la copia instalada si está corriendo, copia a `app.new` y la intercambia por `app/`. Si
+   responde otra instancia por el socket (p. ej. `deno task dev`), avisa y no arranca la nueva.
+4. Escribe el lanzador, el icono, las entradas `.desktop` (menú y autostart con
+   `X-GNOME-Autostart-Delay=5`) y el symlink. Después refresca las cachés de escritorio e iconos.
+5. La arranca con `setsid` y comprueba que responde por el socket.
+
+| Qué                 | Ruta                                                                |
+| ------------------- | ------------------------------------------------------------------- |
+| App (binario + .so) | `~/.local/share/deno-asr/app/`                                      |
+| Lanzador            | `~/.local/share/deno-asr/deno-asr-launch`                           |
+| Menú                | `~/.local/share/applications/dev.damian.deno-asr.desktop`           |
+| Autostart           | `~/.config/autostart/dev.damian.deno-asr.desktop`                   |
+| Icono               | `~/.local/share/icons/hicolor/256x256/apps/dev.damian.deno-asr.png` |
+| Comando             | `~/.local/bin/deno-asr` → `app/deno-asr`                            |
+| Log (stdout/stderr) | `~/.local/state/deno-asr/app.log`                                   |
+
+Se respetan `XDG_DATA_HOME`, `XDG_CONFIG_HOME` y `XDG_STATE_HOME`. `uninstall` borra todo lo de la
+tabla salvo el log, y nunca toca `config.json` ni el dataset.
+
+> Arrancada desde el menú o el autostart, la app **no hereda las variables de tu shell**
+> (`DASHSCOPE_API_KEY`, `ELEVENLABS_API_KEY`, `HOTKEY`, `ASR_DEBUG`…). Guarda las API keys en
+> _Ajustes_ (van a `config.json`) y usa `--debug` para los logs. Si necesitas otra variable, edita
+> el lanzador, aunque la próxima instalación lo sobrescribe.
+
+### Autostart
+
+- Ubuntu: lo pone `install:linux`. Para quitarlo, `install:linux --no-autostart` o borra
+  `~/.config/autostart/dev.damian.deno-asr.desktop`.
 - macOS: _Ajustes del Sistema → General → Ítems de inicio_ → añade `DenoASR.app`.
-- GNOME: crea `~/.config/autostart/deno-asr.desktop` con `Exec=/ruta/al/binario`.
 
 ## Tests
 
@@ -454,6 +501,7 @@ No hay test automático del micro real ni de la GUI.
 ```
 deno.json                 tareas, imports, config de deno desktop
 scripts/build.ts          build:mac / build:linux
+scripts/install_linux.ts  install:linux / uninstall:linux (~/.local, .desktop, autostart)
 helper/                   asr-helper (Rust), ver helper/README.md
   src/main.rs             event loop (tao en macOS) + despacho de comandos
   src/protocol.rs         tipos del protocolo JSON-lines
@@ -545,8 +593,7 @@ Si tienes un entorno de conda activo, su `gsettings` no ve los esquemas del escr
 - Sin UI de revisión/corrección del dataset (hay que editar los `.json`).
 - Las opciones avanzadas (`restoreClipboard`, `pasteKeys`, `sounds`, `notifications`, `maxSeconds`,
   URLs de DashScope/ElevenLabs, `tagAudioEvents`) solo se cambian en `config.json`.
-- Sin autostart integrado.
-- `build:linux` no está verificado en Ubuntu real; la estructura de salida de `deno desktop` en
-  Linux puede requerir ajustar dónde se copia el helper.
+- Sin autostart integrado en macOS.
+- `install:linux` solo instala por usuario. No genera `.deb` ni AppImage.
 - No se ha probado el portal `GlobalShortcuts` de GNOME 48+, que permitiría un atajo nativo en
   Wayland.

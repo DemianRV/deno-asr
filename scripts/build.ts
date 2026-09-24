@@ -76,7 +76,7 @@ async function findDirContaining(root: string, names: string[]): Promise<string 
   return null;
 }
 
-async function buildLinux() {
+export async function buildLinux() {
   const out = join(ROOT, "dist/deno-asr");
   await Deno.remove(out, { recursive: true }).catch(() => {});
   await buildHelper();
